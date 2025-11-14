@@ -1,0 +1,14 @@
+{
+  "name": "witpay-server",
+  "version": "1.0.0",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.89.0",
+    "@solana/spl-token": "^0.3.5",
+    "dotenv": "^17.2.3"
+  }
+}

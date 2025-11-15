@@ -7,83 +7,64 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// -----------------------------
-// TELEGRAM BOT
-// -----------------------------
 const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
 
 async function sendTelegramMessage(text) {
-  try {
-    await bot.sendMessage(process.env.TARGET_CHAT, text, {
-      parse_mode: "Markdown"
-    });
-  } catch (err) {
-    console.error("Telegram Error:", err);
-  }
+    try {
+        await bot.sendMessage(process.env.TARGET_CHAT, text, { parse_mode: "Markdown" });
+    } catch (err) {
+        console.error("Telegram send error:", err);
+    }
 }
 
-// -----------------------------
-// /start command
-// -----------------------------
-bot.on("message", (msg) => {
-  if (msg.text === "/start") {
-    bot.sendMessage(
-      msg.chat.id,
-      `🍸 *Welcome to the WIT Bar Bot!*\n\n` +
-        `Send WIT to the bar wallet below and I'll auto-issue your drink ticket.\n\n` +
-        `*Bar Wallet:* \`${process.env.BAR_WALLET}\``,
-      { parse_mode: "Markdown" }
-    );
-  }
-});
-
-// -----------------------------
-// HELIUS ENHANCED WEBHOOK
-// -----------------------------
 app.post("/webhook", async (req, res) => {
-  try {
-    const events = req.body?.events || [];
+    try {
+        const events = Array.isArray(req.body) ? req.body : req.body.events || [];
 
-    const BAR_WALLET = process.env.BAR_WALLET;
-    const WIT_MINT = process.env.WIT_MINT;
+        const BAR_WALLET = process.env.BAR_WALLET;
+        const BAR_WALLET_ATA = process.env.BAR_WALLET_ATA;
+        const WIT_MINT = process.env.WIT_MINT;
 
-    for (const event of events) {
-      const transfers = event.tokenTransfers || [];
+        for (const event of events) {
+            const transfers = event.tokenTransfers || [];
 
-      for (const t of transfers) {
-        const {
-          mint,
-          tokenAmount,
-          userAccount,   // <-- THIS IS THE REAL OWNER OF DESTINATION ATA
-          signature
-        } = t;
+            for (const t of transfers) {
+                const {
+                    mint,
+                    tokenAmount,
+                    fromUserAccount,
+                    toUserAccount,
+                    signature
+                } = t;
 
-        // Only care about WIT
-        if (mint !== WIT_MINT) continue;
+                // Only WIT coin
+                if (mint !== WIT_MINT) continue;
 
-        // Only care about transfers TO the bar wallet owner
-        if (userAccount !== BAR_WALLET) continue;
+                // Only transfers TO the bar wallet OR its ATA
+                if (toUserAccount !== BAR_WALLET && toUserAccount !== BAR_WALLET_ATA) continue;
 
-        console.log(`🔥 WIT RECEIVED: ${tokenAmount}`);
+                console.log(`🔥 WIT RECEIVED: ${tokenAmount}`);
 
-        await sendTelegramMessage(
-          `🍹 *WIT Payment Detected!*\n\n` +
-            `*Amount:* ${tokenAmount} WIT\n` +
-            `*Transaction:* \`${signature}\`\n\n` +
-            `Enjoy your drink ticket! 🎉`
-        );
-      }
+                await sendTelegramMessage(
+                    `🍹 *WIT Received!*\n\n` +
+                    `*Amount:* ${tokenAmount}\n` +
+                    `*TX:* \`${signature}\`\n\n` +
+                    `Enjoy your drink ticket! 🎉`
+                );
+            }
+        }
+
+        res.status(200).send("ok");
+    } catch (err) {
+        console.error("Webhook error:", err);
+        res.status(500).send("error");
     }
-
-    res.status(200).send("ok");
-  } catch (err) {
-    console.error("Webhook Error:", err);
-    res.status(500).send("error");
-  }
 });
 
-// -----------------------------
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 WIT Bot Server live on ${PORT}`));
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => {
+    console.log(`🚀 WIT Bot Server running on port ${PORT}`);
+});
+
 
 

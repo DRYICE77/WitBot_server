@@ -6,50 +6,43 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// -----------------------------
-// TELEGRAM BOT (WEBHOOK MODE)
-// -----------------------------
+// ----------------------------------
+// TELEGRAM BOT (NO webhook setting here)
+// ----------------------------------
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, { webHook: true });
 
-// Set the webhook to your Railway URL
-bot.setWebHook(`https://${process.env.RAILWAY_STATIC_URL || process.env.WEBHOOK_URL}/webhook`);
+// Telegram will POST messages to your webhook:
+// https://witbotserver-production.up.railway.app/webhook
+bot.setWebHook(`https://witbotserver-production.up.railway.app/webhook`);
 
-// Helper to send messages safely
+// Helper to send messages
 async function sendTelegramMessage(text) {
   try {
-    if (!process.env.TARGET_CHAT) {
-      console.error("❌ TARGET_CHAT missing");
-      return;
-    }
-
-    await bot.sendMessage(process.env.TARGET_CHAT, text, {
-      parse_mode: "Markdown",
-    });
-
+    await bot.sendMessage(process.env.TARGET_CHAT, text, { parse_mode: "Markdown" });
   } catch (err) {
-    console.error("Telegram send error:", err.message);
+    console.error("Telegram send error:", err);
   }
 }
 
-// -----------------------------
+// ----------------------------------
 // /start COMMAND
-// -----------------------------
+// ----------------------------------
+
 bot.on("message", (msg) => {
   if (msg.text === "/start") {
     bot.sendMessage(
       msg.chat.id,
-      `🍹 *Welcome to the WIT Bar Bot!*  
-Send WIT to the bar wallet and I'll send you a drink ticket!  
-\n*Bar Wallet:* \`${process.env.BAR_WALLET}\``,
+      `🍹 *Welcome to the WIT Bar Bot!*\n\nSend WIT to the bar wallet below:\n\`${process.env.BAR_WALLET}\``,
       { parse_mode: "Markdown" }
     );
   }
 });
 
-// -----------------------------
-// HELIUS WEBHOOK
-// -----------------------------
+// ----------------------------------
+// HELIUS WEBHOOK (SPL token detection)
+// ----------------------------------
+
 app.post("/webhook", async (req, res) => {
   try {
     console.log("➡️ Incoming event:", JSON.stringify(req.body, null, 2));
@@ -70,10 +63,9 @@ app.post("/webhook", async (req, res) => {
         console.log(`🔥 WIT RECEIVED: ${tokenAmount}`);
 
         await sendTelegramMessage(
-          `🍹 *WIT Payment Detected!*  
-*Amount:* ${tokenAmount}  
-*TX:* \`${signature}\`  
-Enjoy your drink! 🥂`
+          `🍹 *WIT Payment Detected!*\n` +
+          `*Amount:* ${tokenAmount}\n` +
+          `*TX:* \`${signature}\`\n\nEnjoy your drink! 🥂`
         );
       }
     }
@@ -85,11 +77,12 @@ Enjoy your drink! 🥂`
   }
 });
 
-// -----------------------------
+// ----------------------------------
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`🚀 WIT Bot Server live on port ${PORT}`);
 });
+
 
 
 

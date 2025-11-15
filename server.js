@@ -7,15 +7,36 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-const bot = new TelegramBot(process.env.BOT_TOKEN, { polling: true });
+// ---------------------------------------------
+// TELEGRAM WEBHOOK MODE (not polling)
+// ---------------------------------------------
 
-async function sendTelegramMessage(text) {
-    try {
-        await bot.sendMessage(process.env.TARGET_CHAT, text, { parse_mode: "Markdown" });
-    } catch (err) {
-        console.error("Telegram send error:", err);
+const bot = new TelegramBot(process.env.BOT_TOKEN);
+
+const WEBHOOK_URL = "https://witbotserver-production.up.railway.app/tg";
+
+bot.setWebHook(WEBHOOK_URL);
+
+// Telegram route
+app.post("/tg", (req, res) => {
+    bot.processUpdate(req.body);
+    res.sendStatus(200);
+});
+
+// /start handler
+bot.on("message", (msg) => {
+    if (msg.text === "/start") {
+        bot.sendMessage(
+            msg.chat.id,
+            `🐷 *Welcome to the WIT Bar Bot!*\n\nSend WIT to:\n\`${process.env.BAR_WALLET}\`\nAnd you'll get a drink ticket 🍹`,
+            { parse_mode: "Markdown" }
+        );
     }
-}
+});
+
+// ---------------------------------------------
+// HELIUS WEBHOOK HANDLER
+// ---------------------------------------------
 
 app.post("/webhook", async (req, res) => {
     try {
@@ -37,19 +58,18 @@ app.post("/webhook", async (req, res) => {
                     signature
                 } = t;
 
-                // Only WIT coin
                 if (mint !== WIT_MINT) continue;
 
-                // Only transfers TO the bar wallet OR its ATA
-                if (toUserAccount !== BAR_WALLET && toUserAccount !== BAR_WALLET_ATA) continue;
+                if (toUserAccount !== BAR_WALLET && toUserAccount !== BAR_WALLET_ATA)
+                    continue;
 
-                console.log(`🔥 WIT RECEIVED: ${tokenAmount}`);
-
-                await sendTelegramMessage(
+                await bot.sendMessage(
+                    process.env.TARGET_CHAT,
                     `🍹 *WIT Received!*\n\n` +
                     `*Amount:* ${tokenAmount}\n` +
                     `*TX:* \`${signature}\`\n\n` +
-                    `Enjoy your drink ticket! 🎉`
+                    `Enjoy your drink ticket! 🎉`,
+                    { parse_mode: "Markdown" }
                 );
             }
         }
@@ -61,10 +81,13 @@ app.post("/webhook", async (req, res) => {
     }
 });
 
+// ---------------------------------------------
+// START SERVER
+// ---------------------------------------------
+
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
     console.log(`🚀 WIT Bot Server running on port ${PORT}`);
 });
-
 
 

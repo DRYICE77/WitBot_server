@@ -51,20 +51,25 @@ app.post("/webhook", async (req, res) => {
       const transfers = event.tokenTransfers || [];
 
       for (const t of transfers) {
-        const { mint, tokenAmount, toUserAccount, signature } = t;
+        const {
+          mint,
+          tokenAmount,
+          userAccount,   // <-- THIS IS THE REAL OWNER OF DESTINATION ATA
+          signature
+        } = t;
 
         // Only care about WIT
         if (mint !== WIT_MINT) continue;
 
-        // Only care about transfers to the bar wallet OWNER
-        if (toUserAccount !== BAR_WALLET) continue;
+        // Only care about transfers TO the bar wallet owner
+        if (userAccount !== BAR_WALLET) continue;
 
-        console.log("🔥 WIT RECEIVED", tokenAmount);
+        console.log(`🔥 WIT RECEIVED: ${tokenAmount}`);
 
         await sendTelegramMessage(
-          `🍹 *WIT Received!*\n\n` +
+          `🍹 *WIT Payment Detected!*\n\n` +
             `*Amount:* ${tokenAmount} WIT\n` +
-            `*Tx:* \`${signature}\`\n\n` +
+            `*Transaction:* \`${signature}\`\n\n` +
             `Enjoy your drink ticket! 🎉`
         );
       }
@@ -80,4 +85,5 @@ app.post("/webhook", async (req, res) => {
 // -----------------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 WIT Bot Server live on ${PORT}`));
+
 

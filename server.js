@@ -7,7 +7,7 @@ const app = express();
 app.use(express.json());
 
 // ----------------------------------
-// TELEGRAM BOT — webhook mode
+// TELEGRAM CONFIG
 // ----------------------------------
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -16,23 +16,22 @@ const TG_WEBHOOK_URL = `https://witbotserver-production.up.railway.app${TG_WEBHO
 
 const bot = new TelegramBot(BOT_TOKEN, { webHook: true });
 
-// Tell Telegram where to send messages
+// Set webhook
 bot.setWebHook(TG_WEBHOOK_URL);
+console.log("📡 TG Webhook set to:", TG_WEBHOOK_URL);
 
-console.log("📡 Telegram Webhook set to:", TG_WEBHOOK_URL);
-
-// Express route to receive Telegram messages
+// Telegram → Express → Bot event handler
 app.post(TG_WEBHOOK_PATH, (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
 
 // ----------------------------------
-// /start handler
+// /start command
 // ----------------------------------
 
 bot.on("message", (msg) => {
-  if (!msg?.text) return;
+  if (!msg.text) return;
 
   if (msg.text === "/start") {
     bot.sendMessage(
@@ -44,7 +43,7 @@ bot.on("message", (msg) => {
 });
 
 // ----------------------------------
-// Helper to send Telegram messages
+// Helper: send TG message
 // ----------------------------------
 
 async function sendTelegramMessage(text) {
@@ -58,7 +57,7 @@ async function sendTelegramMessage(text) {
 }
 
 // ----------------------------------
-// Helius webhook
+// HELIUS WEBHOOK
 // ----------------------------------
 
 app.post("/webhook", async (req, res) => {
@@ -79,10 +78,8 @@ app.post("/webhook", async (req, res) => {
         if (mint !== MINT) continue;
         if (toUserAccount !== BAR) continue;
 
-        console.log(`🔥 WIT RECEIVED: ${tokenAmount}`);
-
         await sendTelegramMessage(
-          `🍹 *WIT Payment Detected!*\n` +
+          `🍹 *WIT Payment Received!*\n\n` +
             `*Amount:* ${tokenAmount}\n` +
             `*TX:* \`${signature}\`\n\nCheers! 🥂`
         );
@@ -96,8 +93,6 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// ----------------------------------
-// Start Express
 // ----------------------------------
 
 const PORT = process.env.PORT || 8080;

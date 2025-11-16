@@ -7,20 +7,25 @@ const app = express();
 app.use(express.json());
 
 // ----------------------------------
-// TELEGRAM CONFIG
+// TELEGRAM SETUP
 // ----------------------------------
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
+
+// Telegram will post messages to this path:
 const TG_WEBHOOK_PATH = `/bot${BOT_TOKEN}`;
+
+// Full URL that TG calls:
 const TG_WEBHOOK_URL = `https://witbotserver-production.up.railway.app${TG_WEBHOOK_PATH}`;
 
+// Create bot in webhook mode
 const bot = new TelegramBot(BOT_TOKEN, { webHook: true });
 
-// Set webhook
+// Set Telegram webhook
 bot.setWebHook(TG_WEBHOOK_URL);
-console.log("📡 TG Webhook set to:", TG_WEBHOOK_URL);
+console.log("📡 Telegram webhook set:", TG_WEBHOOK_URL);
 
-// Telegram → Express → Bot event handler
+// EXPRESS endpoint that Telegram POSTS into
 app.post(TG_WEBHOOK_PATH, (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
@@ -43,13 +48,13 @@ bot.on("message", (msg) => {
 });
 
 // ----------------------------------
-// Helper: send TG message
+// SEND TELEGRAM MESSAGE
 // ----------------------------------
 
 async function sendTelegramMessage(text) {
   try {
     await bot.sendMessage(process.env.TARGET_CHAT, text, {
-      parse_mode: "Markdown"
+      parse_mode: "Markdown",
     });
   } catch (err) {
     console.error("❌ Telegram send error:", err);
@@ -57,17 +62,18 @@ async function sendTelegramMessage(text) {
 }
 
 // ----------------------------------
-// HELIUS WEBHOOK
+// HELIUS WEBHOOK — WIT PAYMENTS
 // ----------------------------------
 
 app.post("/webhook", async (req, res) => {
   try {
-    console.log("➡️ Incoming Helius event:");
+    console.log("➡️ Helius event received:");
     console.log(JSON.stringify(req.body, null, 2));
 
-    const events = req.body?.events || [];
     const BAR = process.env.BAR_WALLET;
     const MINT = process.env.WIT_MINT;
+
+    const events = req.body.events || [];
 
     for (const event of events) {
       const transfers = event.tokenTransfers || [];
@@ -86,20 +92,19 @@ app.post("/webhook", async (req, res) => {
       }
     }
 
-    res.status(200).send("ok");
+    res.sendStatus(200);
   } catch (err) {
     console.error("❌ Webhook error:", err);
-    res.status(500).send("err");
+    res.sendStatus(500);
   }
 });
 
 // ----------------------------------
+// START SERVER
+// ----------------------------------
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => {
-  console.log(`🚀 WIT Bot running on port ${PORT}`);
-});
-
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
 
 
 

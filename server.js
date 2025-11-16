@@ -7,20 +7,19 @@ const app = express();
 app.use(express.json());
 
 // ----------------------------------
-// TELEGRAM BOT — Webhook mode
+// TELEGRAM BOT (Webhook Mode)
 // ----------------------------------
 
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
   webHook: true,
 });
 
-// Telegram requires a unique webhook URL
 const TELEGRAM_WEBHOOK = `https://witbotserver-production.up.railway.app/telegram`;
 bot.setWebHook(TELEGRAM_WEBHOOK);
 
 console.log("🐦 Telegram webhook set to:", TELEGRAM_WEBHOOK);
 
-// Helper to send TG messages
+// Send Telegram message
 async function sendTelegramMessage(text) {
   try {
     await bot.sendMessage(process.env.TARGET_CHAT, text, {
@@ -31,10 +30,7 @@ async function sendTelegramMessage(text) {
   }
 }
 
-// ----------------------------------
-// /start COMMAND
-// ----------------------------------
-
+// Handle /start
 bot.on("message", (msg) => {
   if (!msg.text) return;
 
@@ -47,29 +43,53 @@ bot.on("message", (msg) => {
   }
 });
 
-// Telegram webhook route (Telegram POSTS here)
+// Telegram webhook route
 app.post("/telegram", (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
 
 // ----------------------------------
-// HELIUS WEBHOOK — SAFE DEBUG VERSION
+// HELIUS WEBHOOK — REAL PRODUCTION LOGIC
 // ----------------------------------
 
 app.post("/webhook", async (req, res) => {
   try {
-    // 🚨 DO NOT LOG THE FULL PAYLOAD — CRASHES RAILWAY
     const events = req.body?.events || [];
-    const firstEvent = events[0];
+    const evt = events[0];
 
-    // 🔥 SAFE DEBUG LOG (only small parts)
+    if (!evt) {
+      console.log("⚠️ No events found in webhook");
+      return res.status(200).send("ok");
+    }
+
+    // These are the correct fields based on your screenshot
+    const transfers = evt.tokenTransfers || [];
+    const native = evt.nativeTransfers || [];
+
     console.log("🐙 Helius DEBUG:", {
-      tokenTransfers: firstEvent?.tokenTransfers,
-      nativeTransfers: firstEvent?.nativeTransfers,
+      tokenTransfersCount: transfers.length,
+      nativeTransfersCount: native.length,
     });
 
-    // Respond OK so Helius doesn't throttle us
+    const BAR = process.env.BAR_WALLET;
+    const MINT = process.env.WIT_MINT;
+
+    // Iterate token transfers
+    for (const t of transfers) {
+      if (t.mint === MINT && t.toUserAccount === BAR) {
+        console.log("🔥 WIT Payment Detected!", t);
+
+        await sendTelegramMessage(
+          `🍹 *WIT Payment Received!*\n\n` +
+          `*Amount:* ${t.tokenAmount}\n` +
+          `*From:* \`${t.fromUserAccount}\`\n` +
+          `*TX:* \`${t.signature}\`\n\n` +
+          `Your drink is served! 🥂`
+        );
+      }
+    }
+
     res.status(200).send("ok");
   } catch (err) {
     console.error("❌ Webhook error:", err.message);
@@ -83,6 +103,7 @@ const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
+
 
 
 

@@ -10,26 +10,32 @@ app.use(express.json());
 // TELEGRAM BOT — Webhook mode
 // ----------------------------------
 
-const bot = new TelegramBot(process.env.BOT_TOKEN, { webHook: true });
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const TG_WEBHOOK_PATH = `/bot${BOT_TOKEN}`;
+const TG_WEBHOOK_URL = `https://witbotserver-production.up.railway.app${TG_WEBHOOK_PATH}`;
 
-const WEBHOOK_URL = "https://witbotserver-production.up.railway.app/webhook";
-bot.setWebHook(WEBHOOK_URL);
-
-// Send TG message helper
-async function sendTelegramMessage(text) {
-  try {
-    await bot.sendMessage(process.env.TARGET_CHAT, text, {
-      parse_mode: "Markdown"
-    });
-  } catch (err) {
-    console.error("❌ Telegram send error:", err);
+const bot = new TelegramBot(BOT_TOKEN, {
+  webHook: {
+    port: process.env.PORT || 8080
   }
-}
+});
+
+// Tell Telegram where to send updates
+bot.setWebHook(TG_WEBHOOK_URL);
+
+console.log("📡 Telegram Webhook set to:", TG_WEBHOOK_URL);
+
+// ----------------------------------
+// REQUIRED route for Telegram messages
+// ----------------------------------
+app.post(TG_WEBHOOK_PATH, (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
+});
 
 // ----------------------------------
 // HANDLE /start
 // ----------------------------------
-
 bot.on("message", (msg) => {
   if (!msg?.text) return;
 
@@ -43,16 +49,27 @@ bot.on("message", (msg) => {
 });
 
 // ----------------------------------
-// HELIUS WEBHOOK — detects WIT sent TO BAR wallet
+// SEND TG MESSAGE HELPER
 // ----------------------------------
+async function sendTelegramMessage(text) {
+  try {
+    await bot.sendMessage(process.env.TARGET_CHAT, text, {
+      parse_mode: "Markdown"
+    });
+  } catch (err) {
+    console.error("❌ Telegram send error:", err);
+  }
+}
 
+// ----------------------------------
+// HELIUS WEBHOOK — token transfers
+// ----------------------------------
 app.post("/webhook", async (req, res) => {
   try {
     console.log("➡️ Incoming Helius event:");
     console.log(JSON.stringify(req.body, null, 2));
 
     const events = req.body?.events || [];
-
     const BAR = process.env.BAR_WALLET;
     const MINT = process.env.WIT_MINT;
 
@@ -60,14 +77,8 @@ app.post("/webhook", async (req, res) => {
       const transfers = event.tokenTransfers || [];
 
       for (const t of transfers) {
-        const {
-          mint,
-          tokenAmount,
-          toUserAccount,
-          signature
-        } = t;
+        const { mint, tokenAmount, toUserAccount, signature } = t;
 
-        // ✔ Correct fields based on YOUR logs
         if (mint !== MINT) continue;
         if (toUserAccount !== BAR) continue;
 
@@ -75,9 +86,9 @@ app.post("/webhook", async (req, res) => {
 
         await sendTelegramMessage(
           `🍹 *WIT Payment Received!*\n\n` +
-          `*Amount:* ${tokenAmount}\n` +
-          `*TX:* \`${signature}\`\n\n` +
-          `Your drink is served! 🥂`
+            `*Amount:* ${tokenAmount}\n` +
+            `*TX:* \`${signature}\`\n\n` +
+            `Your drink is served! 🥂`
         );
       }
     }
@@ -90,11 +101,13 @@ app.post("/webhook", async (req, res) => {
 });
 
 // ----------------------------------
-
+// START EXPRESS SERVER
+// ----------------------------------
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`🚀 WIT Bot running on port ${PORT}`);
 });
+
 
 
 

@@ -6,33 +6,38 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-// ----------------------------------
+// -------------------------------
 // TELEGRAM BOT (Webhook Mode)
-// ----------------------------------
-
+// -------------------------------
 const bot = new TelegramBot(process.env.BOT_TOKEN, {
-  webHook: true,
+  webHook: true
 });
 
-const TELEGRAM_WEBHOOK = `https://witbotserver-production.up.railway.app/telegram`;
-bot.setWebHook(TELEGRAM_WEBHOOK);
+// Your Telegram webhook URL
+const TG_WEBHOOK_URL = `https://witbotserver-production.up.railway.app/telegram`;
+bot.setWebHook(TG_WEBHOOK_URL);
 
-console.log("🐦 Telegram webhook set to:", TELEGRAM_WEBHOOK);
-
-// Send Telegram message
 async function sendTelegramMessage(text) {
   try {
     await bot.sendMessage(process.env.TARGET_CHAT, text, {
-      parse_mode: "Markdown",
+      parse_mode: "Markdown"
     });
   } catch (err) {
-    console.error("❌ Telegram send error:", err.message);
+    console.error("❌ Telegram send error:", err);
   }
 }
 
-// Handle /start
+// Debug route for Telegram
+app.post("/telegram", (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
+});
+
+// -------------------------------
+// HANDLE /start FROM TELEGRAM
+// -------------------------------
 bot.on("message", (msg) => {
-  if (!msg.text) return;
+  if (!msg?.text) return;
 
   if (msg.text === "/start") {
     bot.sendMessage(
@@ -43,66 +48,76 @@ bot.on("message", (msg) => {
   }
 });
 
-// Telegram webhook route
-app.post("/telegram", (req, res) => {
-  bot.processUpdate(req.body);
-  res.sendStatus(200);
-});
-
-// ----------------------------------
-// HELIUS WEBHOOK — REAL PRODUCTION LOGIC
-// ----------------------------------
-
+// -------------------------------
+// HELIUS WEBHOOK LISTENER (DEBUG MODE)
+// -------------------------------
 app.post("/webhook", async (req, res) => {
-  try {
-    const events = req.body?.events || [];
-    const evt = events[0];
+  console.log("🔥 RAW HELIUS WEBHOOK RECEIVED:");
+  console.log(JSON.stringify(req.body, null, 2));
 
-    if (!evt) {
-      console.log("⚠️ No events found in webhook");
-      return res.status(200).send("ok");
+  const events = req.body?.events || [];
+
+  if (!events.length) {
+    console.log("⚠️ No events array present in webhook");
+    return res.status(200).send("ok");
+  }
+
+  // Env vars
+  const BAR = process.env.BAR_WALLET;
+  const MINT = process.env.WIT_MINT;
+
+  let matched = false;
+
+  for (const event of events) {
+    const transfers = event?.tokenTransfers || [];
+
+    if (!transfers.length) {
+      console.log("⚠️ Event contains NO tokenTransfers");
+      continue;
     }
 
-    // These are the correct fields based on your screenshot
-    const transfers = evt.tokenTransfers || [];
-    const native = evt.nativeTransfers || [];
+    console.log("🔍 tokenTransfers found:", transfers.length);
 
-    console.log("🐙 Helius DEBUG:", {
-      tokenTransfersCount: transfers.length,
-      nativeTransfersCount: native.length,
-    });
-
-    const BAR = process.env.BAR_WALLET;
-    const MINT = process.env.WIT_MINT;
-
-    // Iterate token transfers
     for (const t of transfers) {
-      if (t.mint === MINT && t.toUserAccount === BAR) {
-        console.log("🔥 WIT Payment Detected!", t);
+      console.log("🔎 Checking transfer:", t);
+
+      const mint = t.mint;
+      const amount = t.tokenAmount;
+      const toUser = t.toUserAccount;
+      const sig = t.signature;
+
+      // Matching logic
+      if (mint === MINT && toUser === BAR) {
+        matched = true;
+
+        console.log("🎉 MATCHED WIT PAYMENT!");
 
         await sendTelegramMessage(
           `🍹 *WIT Payment Received!*\n\n` +
-          `*Amount:* ${t.tokenAmount}\n` +
-          `*From:* \`${t.fromUserAccount}\`\n` +
-          `*TX:* \`${t.signature}\`\n\n` +
+          `*Amount:* ${amount}\n` +
+          `*TX:* \`${sig}\`\n\n` +
           `Your drink is served! 🥂`
         );
       }
     }
-
-    res.status(200).send("ok");
-  } catch (err) {
-    console.error("❌ Webhook error:", err.message);
-    res.status(500).send("err");
   }
+
+  if (!matched) {
+    console.log("⚠️ No matching WIT transfers found in webhook");
+  }
+
+  res.status(200).send("ok");
 });
 
-// ----------------------------------
-
+// -------------------------------
+// START SERVER
+// -------------------------------
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`📡 Telegram webhook set to: ${TG_WEBHOOK_URL}`);
 });
+
 
 
 

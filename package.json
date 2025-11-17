@@ -1,14 +1,17 @@
 {
   "name": "witbot-server",
   "version": "1.0.0",
-  "type": "module",
   "main": "server.js",
+  "type": "module",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
+    "dotenv": "^16.4.5",
     "express": "^4.18.2",
-    "node-telegram-bot-api": "^0.61.0"
+    "body-parser": "^1.20.2",
+    "telegraf": "^4.15.3",
+    "node-fetch": "^3.3.2"
   }
 }
 

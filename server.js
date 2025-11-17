@@ -1,91 +1,80 @@
-import express from "express";
-import dotenv from "dotenv";
-import TelegramBot from "node-telegram-bot-api";
-
+// ========================================
+// Load environment variables FIRST
+// ========================================
+import dotenv from 'dotenv';
 dotenv.config();
 
-const app = express();
-app.use(express.json());
+import express from 'express';
+import bodyParser from 'body-parser';
+import { Telegraf } from 'telegraf';
 
-// 🔥 DEBUG: Print all env keys (NOT VALUES)
+const app = express();
+app.use(bodyParser.json());
+
+// ========================================
+// Validate ENV keys
+// ========================================
 console.log("===== ENV KEYS LOADED =====");
-Object.keys(process.env).forEach(k => {
-  if (["BOT_TOKEN","SERVER_URL","TARGET_CHAT","PORT","BAR_WALLET","WIT_MINT","BAR_WALLET_ATA"].includes(k)) {
-    console.log(`Loaded ${k}: OK`);
+const REQUIRED_KEYS = [
+  "PORT",
+  "BOT_TOKEN",
+  "SERVER_URL",
+  "TARGET_CHAT",
+  "WIT_MINT",
+  "BAR_WALLET"
+];
+
+REQUIRED_KEYS.forEach(key => {
+  if (!process.env[key]) {
+    console.log(`❌ ${key} MISSING`);
+  } else {
+    console.log(`Loaded ${key}: OK`);
   }
 });
-console.log("================================");
 
-// 🔧 Load environment variables
-const BOT_TOKEN     = process.env.BOT_TOKEN;
-const SERVER_URL    = process.env.SERVER_URL;
-const TARGET_CHAT   = process.env.TARGET_CHAT;
-const PORT          = process.env.PORT || 8080;
+console.log("========================================");
 
-if (!BOT_TOKEN) console.error("❌ BOT_TOKEN MISSING");
-if (!SERVER_URL) console.error("❌ SERVER_URL MISSING");
-if (!TARGET_CHAT) console.error("❌ TARGET_CHAT MISSING");
+// -------------------------------------------------
+// Setup Telegram Bot
+// -------------------------------------------------
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const bot = new Telegraf(BOT_TOKEN);
 
-// 🚀 Create Telegram Bot (webhook mode)
-const bot = new TelegramBot(BOT_TOKEN, { webHook: true });
+const SERVER_URL = process.env.SERVER_URL;
+const webhookUrl = `${SERVER_URL}/telegram`;
 
-// 🔥 Set Telegram webhook
-const webhookURL = `${SERVER_URL}/telegram`;
-console.log(`📡 Setting Telegram webhook to: ${webhookURL}`);
+async function setupWebhook() {
+  try {
+    console.log(`📡 Setting Telegram webhook to: ${webhookUrl}`);
+    await bot.telegram.setWebhook(webhookUrl);
+    console.log("✅ Telegram webhook set successfully");
+  } catch (err) {
+    console.error("❌ Failed to set webhook:", err);
+  }
+}
 
-bot.setWebHook(webhookURL)
-  .then(() => console.log("✅ Telegram webhook set successfully"))
-  .catch(err => console.error("❌ Failed to set webhook:", err));
+app.use(bot.webhookCallback('/telegram'));
 
-// 🟣 Telegram Webhook Route
-app.post("/telegram", (req, res) => {
-  console.log("🔥 Telegram Update Received:", JSON.stringify(req.body, null, 2));
-  bot.processUpdate(req.body);
-  res.sendStatus(200);
+// -------------------------------------------------
+// Start server THEN set webhook
+// -------------------------------------------------
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, async () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+  await setupWebhook();
 });
 
-// 🟧 Helius Webhook Route
-app.post("/webhook", (req, res) => {
+// -------------------------------------------------
+// Helius Webhook Receiver
+// -------------------------------------------------
+app.post("/webhook", async (req, res) => {
   console.log("🔥 RAW HELIUS WEBHOOK RECEIVED:");
   console.log(JSON.stringify(req.body, null, 2));
 
-  try {
-    const events = req.body[0]?.events;
-
-    if (!events || Object.keys(events).length === 0) {
-      console.log("⚠️ No events array found in webhook");
-      return res.sendStatus(200);
-    }
-
-    const tokenTransfer = events?.tokenTransfers?.[0];
-    if (!tokenTransfer) {
-      console.log("⚠️ No token transfer found");
-      return res.sendStatus(200);
-    }
-
-    const amount = tokenTransfer.tokenAmount;
-    const from   = tokenTransfer.fromUserAccount;
-    const to     = tokenTransfer.toUserAccount;
-
-    // 🔥 SEND TELEGRAM MSG
-    const msg = `💸 *WIT Received!*\n\n` +
-                `Amount: *${amount}*\n` +
-                `From: \`${from}\`\n` +
-                `To: \`${to}\``;
-
-    bot.sendMessage(TARGET_CHAT, msg, { parse_mode: "Markdown" });
-
-  } catch (err) {
-    console.error("❌ Error while processing webhook:", err);
-  }
-
-  res.sendStatus(200);
+  return res.status(200).send("ok");
 });
 
-// 🚀 Start Server
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+
 
 
 

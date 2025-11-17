@@ -1,80 +1,106 @@
+// server.js
 import express from "express";
-import TelegramBot from "node-telegram-bot-api";
 import dotenv from "dotenv";
+import TelegramBot from "node-telegram-bot-api";
 
 dotenv.config();
 
 const app = express();
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json());
 
+// ----------------------------
+// ENVIRONMENT VARIABLES
+// ----------------------------
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const TARGET_CHAT = process.env.TARGET_CHAT;
-const SERVER_URL = process.env.SERVER_URL;  // MUST NOT end with "/"
+const SERVER_URL = process.env.SERVER_URL;   // MUST BE EXACT MATCH
 const PORT = process.env.PORT || 8080;
 
-// Create Telegram bot (no polling)
-const bot = new TelegramBot(BOT_TOKEN, { webHook: true });
+// Debug print
+console.log("🔧 Loaded SERVER_URL:", SERVER_URL);
+console.log("🔧 Loaded BOT_TOKEN:", BOT_TOKEN ? "OK" : "MISSING");
+console.log("🔧 Loaded TARGET_CHAT:", TARGET_CHAT ? "OK" : "MISSING");
 
-// --- Register webhook ONLY if URL exists ---
-async function initWebhook() {
+// ----------------------------
+// TELEGRAM SETUP
+// ----------------------------
+const bot = new TelegramBot(BOT_TOKEN, {
+  polling: false,
+});
+
+// Attempt to set webhook
+(async () => {
   try {
-    const fullWebhookURL = `${SERVER_URL}/telegram`;
-    console.log("🔗 Setting Telegram webhook to:", fullWebhookURL);
+    const hookUrl = `${SERVER_URL}/telegram`;
+    console.log("📡 Setting Telegram webhook to:", hookUrl);
 
-    const res = await bot.setWebHook(fullWebhookURL);
-    console.log("✅ Telegram webhook set:", res);
+    await bot.setWebHook(hookUrl);
+    console.log("✅ Telegram webhook set successfully!");
   } catch (err) {
-    console.error("❌ Failed to set webhook:", err.message);
+    console.error("❌ Failed to set webhook:", err.toString());
   }
-}
+})();
 
-initWebhook();
+// Telegram webhook endpoint
+app.post("/telegram", async (req, res) => {
+  console.log("📥 Telegram update received:", req.body);
 
-// --- HEALTH CHECK (fixes Telegram 400 errors!) ---
-app.get("/", (req, res) => {
-  res.send("WitBot server alive");
+  try {
+    await bot.processUpdate(req.body);
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("❌ Telegram update error:", err);
+    res.sendStatus(500);
+  }
 });
 
-// --- TELEGRAM WEBHOOK ENDPOINT ---
-app.post("/telegram", (req, res) => {
-  bot.processWebHook(req.body);
-  res.sendStatus(200);
-});
-
-// --- HELIUS WEBHOOK ENDPOINT ---
+// ----------------------------
+// HELIUS ENHANCED WEBHOOK
+// ----------------------------
 app.post("/webhook", async (req, res) => {
   console.log("🔥 RAW HELIUS WEBHOOK RECEIVED:");
-  console.dir(req.body, { depth: null });
+  console.log(JSON.stringify(req.body, null, 2));
 
   try {
-    const tx = req.body[0];
-    if (!tx) {
-      console.log("⚠️ No tx object");
+    const events = req.body;
+    if (!Array.isArray(events) || events.length === 0) {
+      console.log("⚠️ No events array present in webhook");
       return res.sendStatus(200);
     }
 
-    // FILTER: does this contain the mint we want?
-    const containsWIT = (tx.tokenTransfers || []).some(
-      (t) => t.mint === process.env.WIT_MINT
-    );
+    for (const event of events) {
+      const description = event.description || "";
+      const tokenTransfers = event.tokenTransfers || [];
 
-    if (!containsWIT) {
-      console.log("⚠️ Transaction does not contain WIT mint");
-      return res.sendStatus(200);
-    }
+      // Debug what tokenTransfers contains
+      console.log("🔍 tokenTransfers:", tokenTransfers);
 
-    // Extract token transfers
-    for (const transfer of tx.tokenTransfers || []) {
-      if (transfer.mint !== process.env.WIT_MINT) continue;
+      // Detect any WIT token transfer involving BAR WALLET
+      tokenTransfers.forEach(async (tx) => {
+        try {
+          const from = tx.fromUserAccount;
+          const to = tx.toUserAccount;
+          const mint = tx.mint;
+          const amount = tx.tokenAmount;
 
-      const amount = transfer.tokenAmount;
-      const fromAcc = transfer.fromUserAccount;
-      const toAcc = transfer.toUserAccount;
+          // Debug each movement
+          console.log(
+            `🔎 Transfer — mint: ${mint}, amount: ${amount}, from: ${from}, to: ${to}`
+          );
 
-      const msg = `💸 *WIT Transfer Detected!*\n\n*Amount:* ${amount}\n*From:* \`${fromAcc}\`\n*To:* \`${toAcc}\``;
+          // --------------------------
+          // Insert your token + wallet filters here
+          // --------------------------
+          if (mint === process.env.WIT_MINT && to === process.env.BAR_WALLET) {
+            const msg = `🐷 Someone just deposited *${amount} WIT* into the Bar Wallet!`;
+            console.log("📢 Sending Telegram message:", msg);
 
-      await bot.sendMessage(TARGET_CHAT, msg, { parse_mode: "Markdown" });
-      console.log("📤 Sent message to Telegram");
+            await bot.sendMessage(TARGET_CHAT, msg, { parse_mode: "Markdown" });
+          }
+        } catch (err) {
+          console.error("❌ Error parsing transfer:", err);
+        }
+      });
     }
 
     res.sendStatus(200);
@@ -84,10 +110,13 @@ app.post("/webhook", async (req, res) => {
   }
 });
 
-// --- START SERVER ---
+// ----------------------------
+// START SERVER
+// ----------------------------
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
+
 
 
 

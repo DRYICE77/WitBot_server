@@ -1,17 +1,16 @@
 {
   "name": "witbot-server",
   "version": "1.0.0",
-  "description": "WIT Bot Webhook Server",
   "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "axios": "^1.6.7",
-    "body-parser": "^1.20.2",
-    "dotenv": "^17.2.3",
     "express": "^4.18.2",
+    "body-parser": "^1.20.2",
+    "dotenv": "^16.3.1",
     "telegraf": "^4.12.2"
   }
 }
+

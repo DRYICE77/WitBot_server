@@ -1,156 +1,103 @@
-import express from "express";
-import TelegramBot from "node-telegram-bot-api";
+// ========================================
+// Load ENV
+// ========================================
+import dotenv from 'dotenv';
+dotenv.config();
+
+import express from 'express';
+import bodyParser from 'body-parser';
+import { Telegraf } from 'telegraf';
 
 const app = express();
-app.use(express.json());
+app.use(bodyParser.json());
 
-// ================================
-// 🔧 Load ENV Variables
-// ================================
+// ENV Vars
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const SERVER_URL = process.env.SERVER_URL;
-const PORT = process.env.PORT || 8080;
-const TARGET_CHAT = process.env.TARGET_CHAT;
-
+const TARGET_CHAT = process.env.TARGET_CHAT;   // Your Telegram Chat ID
 const BAR_WALLET = process.env.BAR_WALLET;
-const BAR_WALLET_ATA = process.env.BAR_WALLET_ATA;
-const WIT_MINT = process.env.WIT_MINT;
 
-// ================================
-// ⚠️ Validate ENV Keys
-// ================================
-console.log("===== ENV KEYS LOADED =====");
-
-function checkEnv(name, value) {
-    if (!value || value.length < 3) {
-        console.log(`❌ ${name} MISSING`);
-        return false;
-    }
-    console.log(`Loaded ${name}: OK`);
-    return true;
+if (!BOT_TOKEN || !SERVER_URL || !TARGET_CHAT) {
+  console.error("❌ Missing required ENV variables.");
 }
 
-checkEnv("PORT", PORT);
-checkEnv("BOT_TOKEN", BOT_TOKEN);
-checkEnv("SERVER_URL", SERVER_URL);
-checkEnv("TARGET_CHAT", TARGET_CHAT);
-checkEnv("WIT_MINT", WIT_MINT);
-checkEnv("BAR_WALLET", BAR_WALLET);
-checkEnv("BAR_WALLET_ATA", BAR_WALLET_ATA);
+const bot = new Telegraf(BOT_TOKEN);
 
-// ================================
-// 🤖 Initialize Telegram Bot (Webhook Mode)
-// ================================
-console.log("\nStarting Telegram bot…");
+// ========================================
+// Telegram command: /start ONLY
+// ========================================
+bot.start((ctx) => {
+  ctx.reply(
+    "🍹 *Welcome to the WIT Drink Bot!* 🍹\n\n" +
+    "Send WIT to the bar wallet:\n" +
+    `\`${BAR_WALLET}\`\n`,
+    { parse_mode: "Markdown" }
+  );
+});
 
-const bot = new TelegramBot(BOT_TOKEN, { polling: false });
+// ❌ REMOVE all other message handlers — we don't want spam
+// bot.on("message", ...)  ← removed entirely
 
-const TELEGRAM_WEBHOOK_URL = `${SERVER_URL}/telegram`;
+// ========================================
+// Telegram Webhook Endpoint
+// ========================================
+app.post("/telegram", (req, res) => {
+  bot.handleUpdate(req.body);
+  res.sendStatus(200);
+});
 
-try {
-    await bot.setWebHook(TELEGRAM_WEBHOOK_URL);
-    console.log(`✅ Telegram webhook set to: ${TELEGRAM_WEBHOOK_URL}`);
-} catch (err) {
-    console.error("❌ Failed to set Telegram webhook:", err.message);
-}
+// Set Telegram Webhook on startup
+bot.telegram.setWebhook(`${SERVER_URL}/telegram`)
+  .then(() => console.log("✅ Telegram webhook set"))
+  .catch(err => console.error("❌ Failed to set Telegram webhook:", err));
 
-// ================================
-// 📩 Telegram Webhook Receiver
-// ================================
-app.post("/telegram", async (req, res) => {
-    try {
-        const update = req.body;
+// ========================================
+// HELIUS WEBHOOK → Detect WIT Transfers
+// ========================================
+app.post("/webhook", async (req, res) => {
+  try {
+    const events = req.body;
 
-        if (update.message && update.message.text) {
-            const msg = update.message.text;
-            const user = update.message.from.username || update.message.from.first_name;
-
-            console.log(`💬 Message from ${user}:`, msg);
-
-            // Echo message for now (you can customize)
-            await bot.sendMessage(TARGET_CHAT, `📩 *New Message from ${user}:*\n${msg}`, {
-                parse_mode: "Markdown",
-            });
-        }
-
-        res.sendStatus(200);
-    } catch (err) {
-        console.error("❌ Telegram /telegram handler error:", err);
-        res.sendStatus(500);
+    if (!Array.isArray(events)) {
+      return res.sendStatus(400);
     }
-});
 
-// ================================
-// 🔥 Helius Webhook for Tracking WIT Transfers
-// ================================
-app.post("/helius", async (req, res) => {
-    try {
-        console.log("📡 Helius Webhook Received!");
+    for (const event of events) {
+      if (event.type === "TRANSFER" && event.tokenTransfers?.length > 0) {
+        const witTransfers = event.tokenTransfers.filter(
+          t => t.mint === process.env.WIT_MINT
+        );
 
-        const data = req.body;
+        for (const t of witTransfers) {
+          const direction = t.toUserAccount === BAR_WALLET ? "Incoming" : "Outgoing";
 
-        if (!data || !data[0] || !data[0].tokenTransfers) {
-            return res.sendStatus(200);
+          const msg =
+            "🔥 *WIT Transfer Detected!* 🔥\n\n" +
+            `• *Direction:* ${direction === "Incoming" ? "⬅️ Incoming" : "➡️ Outgoing"}\n` +
+            `• *Amount:* ${t.amount}\n` +
+            `• *From:* \`${t.fromUserAccount}\`\n` +
+            `• *To:* \`${t.toUserAccount}\`\n\n` +
+            "#WITTracker";
+
+          await bot.telegram.sendMessage(TARGET_CHAT, msg, {
+            parse_mode: "Markdown"
+          });
         }
-
-        const transfers = data[0].tokenTransfers;
-
-        for (const t of transfers) {
-            const mint = t.mint;
-            const from = t.fromUserAccount;
-            const to = t.toUserAccount;
-            const amount = t.tokenAmount;
-
-            if (mint !== WIT_MINT) continue;
-
-            const involvesWallet =
-                from === BAR_WALLET ||
-                to === BAR_WALLET ||
-                from === BAR_WALLET_ATA ||
-                to === BAR_WALLET_ATA;
-
-            if (!involvesWallet) continue;
-
-            console.log("🔥 WIT Transfer Detected:", { from, to, amount });
-
-            const direction =
-                to === BAR_WALLET || to === BAR_WALLET_ATA
-                    ? "➡️ Incoming"
-                    : "⬅️ Outgoing";
-
-            const message = `
-🔥 *WIT Transfer Detected!*
-
-• *Direction:* ${direction}
-• *Amount:* ${amount}
-• *From:* \`${from}\`
-• *To:* \`${to}\`
-
-#WITTracker
-            `;
-
-            await bot.sendMessage(TARGET_CHAT, message, { parse_mode: "Markdown" });
-        }
-
-        res.sendStatus(200);
-    } catch (err) {
-        console.error("❌ Error in /helius webhook:", err);
-        res.sendStatus(500);
+      }
     }
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("❌ Error processing webhook:", err);
+    res.sendStatus(500);
+  }
 });
 
-// ================================
-// 🌐 Default Route
-// ================================
-app.get("/", (req, res) => {
-    res.send("WitBot server running.");
-});
-
-// ================================
-// 🚀 Start Server
-// ================================
+// ========================================
+// Start Express Server
+// ========================================
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
 
 

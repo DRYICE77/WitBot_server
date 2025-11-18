@@ -32,14 +32,13 @@ const MENU = {
   bucket: { name: "Party Bucket 🎉", price: 15 },
 };
 
-// Plain text menu (safe for Telegram)
 function getMenuText() {
   return (
     "🍹 WIT Bar Menu\n\n" +
     Object.entries(MENU)
       .map(
-        ([k, item]) =>
-          `${item.name} — ${item.price} WIT\nBuy: /buy_${k}`
+        ([key, item]) =>
+          `${item.name} — ${item.price} WIT\nBuy: /buy_${key}`
       )
       .join("\n\n")
   );
@@ -67,7 +66,7 @@ let walletToTelegram = loadJSON(MAP_FILE);
 let processedTxs = loadJSON(PROCESSED_FILE);
 
 // =======================
-// EXPRESS APP
+// EXPRESS
 // =======================
 
 const app = express();
@@ -79,13 +78,6 @@ app.use(express.json());
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { webHook: true });
 const TELEGRAM_WEBHOOK = `${SERVER_URL}/telegram`;
-
-bot.setMyCommands([
-  { command: "menu", description: "Show drink menu 🍹" },
-  { command: "buy_beer", description: "Buy a Beer (5 WIT)" },
-  { command: "buy_cocktail", description: "Buy a Cocktail (10 WIT)" },
-  { command: "buy_bucket", description: "Buy a Party Bucket (15 WIT)" },
-]);
 
 async function setWebhook() {
   try {
@@ -102,15 +94,13 @@ app.post("/telegram", (req, res) => {
 });
 
 // =======================
-// /start COMMAND
+// /start
 // =======================
 
 bot.onText(/\/start/, (msg) => {
-  const chatId = msg.chat.id;
-
   bot.sendMessage(
-    chatId,
-    `🍻 *Welcome to the WIT Bar Bot!*\n\nSend WIT to the bar wallet:\n\`${BAR_WALLET}\`\n\nReply with your *Solana wallet address* to link your account.`,
+    msg.chat.id,
+    `🍻 *Welcome to the WIT Bar Bot!*\n\nSend WIT to the bar wallet:\n\`${BAR_WALLET}\`\n\nReply with your *Solana wallet address* to link your WIT balance.`,
     { parse_mode: "Markdown" }
   );
 });
@@ -125,7 +115,6 @@ bot.on("message", (msg) => {
 
   if (!text) return;
 
-  // Simple Solana address heuristic
   if (text.length > 30 && text.length < 60 && !text.startsWith("/")) {
     walletToTelegram[text] = chatId;
     saveJSON(MAP_FILE, walletToTelegram);
@@ -136,7 +125,7 @@ bot.on("message", (msg) => {
 });
 
 // =======================
-// /menu COMMAND
+// MENU COMMAND
 // =======================
 
 bot.onText(/\/menu/, (msg) => {
@@ -144,7 +133,7 @@ bot.onText(/\/menu/, (msg) => {
 });
 
 // =======================
-// DRINK PURCHASE LOGIC
+// BUY DRINK HANDLER
 // =======================
 
 function handleBuy(drinkKey, chatId, wallet) {
@@ -167,15 +156,14 @@ function handleBuy(drinkKey, chatId, wallet) {
 
   bot.sendMessage(
     chatId,
-    `🎫 *Drink Ticket Created!*\n\n${item.name}\nPrice: *${item.price} WIT*\nTicket ID: \`${ticketId}\`\n\nShow this ticket to the bartender.`,
+    `🎫 *Drink Ticket Created!*\n\n${item.name}\nPrice: *${item.price} WIT*\nTicket ID: \`${ticketId}\``,
     { parse_mode: "Markdown" }
   );
 }
 
-["beer", "cocktail", "bucket"].forEach((drinkKey) => {
-  bot.onText(new RegExp(`/buy_${drinkKey}`), (msg) => {
+["beer", "cocktail", "bucket"].forEach((key) => {
+  bot.onText(new RegExp(`/buy_${key}`), (msg) => {
     const chatId = msg.chat.id;
-
     const wallet = Object.keys(walletToTelegram).find(
       (w) => walletToTelegram[w] === chatId
     );
@@ -185,57 +173,69 @@ function handleBuy(drinkKey, chatId, wallet) {
       return;
     }
 
-    handleBuy(drinkKey, chatId, wallet);
+    handleBuy(key, chatId, wallet);
   });
 });
 
 // =======================
-// HELIUS WEBHOOK WITH CORRECT IDEMPOTENCY
+// HELIUS WEBHOOK (WITH LOGGING ADDED)
 // =======================
 
 app.post("/helius", (req, res) => {
   try {
+    // 🔥 PRINT THE RAW WEBHOOK BODY
+    console.log("📩 Incoming Helius Webhook:", JSON.stringify(req.body, null, 2));
+
     const body = req.body;
-    if (!body || !body[0]) return res.sendStatus(200);
 
-    const tx = body[0];
-    const signature = tx.signature;
+    // Helius sometimes sends raw object, sometimes array
+    const tx = Array.isArray(body) ? body[0] : body;
+    if (!tx) return res.sendStatus(200);
 
-    // Ignore early webhooks without token transfers
-    if (!tx.tokenTransfers || tx.tokenTransfers.length === 0) {
-      console.log("ℹ️ No token transfers yet. Ignoring.");
+    const signature = tx.signature || tx.transaction?.signature;
+
+    if (!tx.tokenTransfers && !tx.events && !tx.transaction) {
+      console.log("ℹ️ No transaction content found.");
+    }
+
+    // SUPPORT MULTIPLE POTENTIAL LOCATIONS FOR tokenTransfers
+    const possibleTransfers =
+      tx.tokenTransfers ||
+      tx.events?.tokenTransfers ||
+      tx.transaction?.tokenTransfers ||
+      tx.transaction?.events?.tokenTransfers ||
+      [];
+
+    if (!possibleTransfers || possibleTransfers.length === 0) {
+      console.log("ℹ️ No SPL transfers found.");
       return res.sendStatus(200);
     }
 
-    tx.tokenTransfers.forEach((t) => {
-      const isWitTransfer =
-        t.mint === WIT_MINT &&
-        t.toUserAccount === BAR_WALLET;
+    possibleTransfers.forEach((t) => {
+      const isWit =
+        t.mint === WIT_MINT && t.toUserAccount === BAR_WALLET;
 
-      if (!isWitTransfer) return;
+      if (!isWit) return;
 
-      // Idempotency check only AFTER confirming it's a real WIT → bar transfer
       if (processedTxs[signature]) {
-        console.log("⚠️ Duplicate WIT webhook ignored:", signature);
-        return res.sendStatus(200);
+        console.log("⚠️ Duplicate processed:", signature);
+        return;
       }
 
-      // Mark as processed now
       processedTxs[signature] = true;
       saveJSON(PROCESSED_FILE, processedTxs);
 
       const amount = Number(t.tokenAmount);
-      const senderWallet = t.fromUserAccount;
+      const sender = t.fromUserAccount;
 
-      balances[senderWallet] = (balances[senderWallet] || 0) + amount;
+      balances[sender] = (balances[sender] || 0) + amount;
       saveJSON(BAL_FILE, balances);
 
-      const telegramId = walletToTelegram[senderWallet];
-
+      const telegramId = walletToTelegram[sender];
       if (telegramId) {
         bot.sendMessage(
           telegramId,
-          `🍻 *WIT RECEIVED!*\nYou sent *${amount} WIT*.\nNew balance: *${balances[senderWallet]} WIT*`,
+          `🍻 *WIT RECEIVED!*\nYou sent *${amount} WIT*.\nNew balance: *${balances[sender]} WIT*`,
           { parse_mode: "Markdown" }
         );
 

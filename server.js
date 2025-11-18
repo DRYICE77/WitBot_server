@@ -32,13 +32,14 @@ const MENU = {
   bucket: { name: "Party Bucket 🎉", price: 15 },
 };
 
+// Plain text menu (safe for Telegram)
 function getMenuText() {
   return (
     "🍹 WIT Bar Menu\n\n" +
     Object.entries(MENU)
       .map(
-        ([key, item]) =>
-          `${item.name} — ${item.price} WIT\nBuy: /buy_${key}`
+        ([k, item]) =>
+          `${item.name} — ${item.price} WIT\nBuy: /buy_${k}`
       )
       .join("\n\n")
   );
@@ -66,7 +67,7 @@ let walletToTelegram = loadJSON(MAP_FILE);
 let processedTxs = loadJSON(PROCESSED_FILE);
 
 // =======================
-// EXPRESS
+// EXPRESS APP
 // =======================
 
 const app = express();
@@ -124,7 +125,7 @@ bot.on("message", (msg) => {
 
   if (!text) return;
 
-  // Detect wallet address (simple heuristic)
+  // Simple Solana address heuristic
   if (text.length > 30 && text.length < 60 && !text.startsWith("/")) {
     walletToTelegram[text] = chatId;
     saveJSON(MAP_FILE, walletToTelegram);
@@ -189,7 +190,7 @@ function handleBuy(drinkKey, chatId, wallet) {
 });
 
 // =======================
-// HELIUS WEBHOOK (WIT TRANSFERS)
+// HELIUS WEBHOOK WITH CORRECT IDEMPOTENCY
 // =======================
 
 app.post("/helius", (req, res) => {
@@ -200,36 +201,45 @@ app.post("/helius", (req, res) => {
     const tx = body[0];
     const signature = tx.signature;
 
-    // Idempotency: prevent double-crediting
-    if (processedTxs[signature]) {
-      console.log("⚠️ Duplicate webhook ignored:", signature);
+    // Ignore early webhooks without token transfers
+    if (!tx.tokenTransfers || tx.tokenTransfers.length === 0) {
+      console.log("ℹ️ No token transfers yet. Ignoring.");
       return res.sendStatus(200);
     }
 
-    processedTxs[signature] = true;
-    saveJSON(PROCESSED_FILE, processedTxs);
-
-    if (!tx.tokenTransfers) return res.sendStatus(200);
-
     tx.tokenTransfers.forEach((t) => {
-      if (t.mint === WIT_MINT && t.toUserAccount === BAR_WALLET) {
-        const amount = Number(t.tokenAmount);
-        const senderWallet = t.fromUserAccount;
+      const isWitTransfer =
+        t.mint === WIT_MINT &&
+        t.toUserAccount === BAR_WALLET;
 
-        balances[senderWallet] = (balances[senderWallet] || 0) + amount;
-        saveJSON(BAL_FILE, balances);
+      if (!isWitTransfer) return;
 
-        const telegramId = walletToTelegram[senderWallet];
+      // Idempotency check only AFTER confirming it's a real WIT → bar transfer
+      if (processedTxs[signature]) {
+        console.log("⚠️ Duplicate WIT webhook ignored:", signature);
+        return res.sendStatus(200);
+      }
 
-        if (telegramId) {
-          bot.sendMessage(
-            telegramId,
-            `🍻 *WIT RECEIVED!*\nYou sent *${amount} WIT*.\nNew balance: *${balances[senderWallet]} WIT*`,
-            { parse_mode: "Markdown" }
-          );
+      // Mark as processed now
+      processedTxs[signature] = true;
+      saveJSON(PROCESSED_FILE, processedTxs);
 
-          bot.sendMessage(telegramId, getMenuText());
-        }
+      const amount = Number(t.tokenAmount);
+      const senderWallet = t.fromUserAccount;
+
+      balances[senderWallet] = (balances[senderWallet] || 0) + amount;
+      saveJSON(BAL_FILE, balances);
+
+      const telegramId = walletToTelegram[senderWallet];
+
+      if (telegramId) {
+        bot.sendMessage(
+          telegramId,
+          `🍻 *WIT RECEIVED!*\nYou sent *${amount} WIT*.\nNew balance: *${balances[senderWallet]} WIT*`,
+          { parse_mode: "Markdown" }
+        );
+
+        bot.sendMessage(telegramId, getMenuText());
       }
     });
 

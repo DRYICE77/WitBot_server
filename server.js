@@ -76,12 +76,27 @@ app.use(express.json());
 // =======================
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, {
-  webHook: { port: PORT },
+  webHook: true,
   polling: false
 });
 
-// Full webhook URL (Telegram must reach this)
 const TELEGRAM_WEBHOOK = `${SERVER_URL}/telegram`;
+
+async function initWebhook() {
+  try {
+    await bot.setWebHook(TELEGRAM_WEBHOOK);
+    console.log("✅ Telegram webhook set:", TELEGRAM_WEBHOOK);
+  } catch (err) {
+    console.error("❌ Telegram webhook error:", err);
+  }
+}
+
+// Telegram → Express → Bot
+app.post("/telegram", (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
+});
+
 
 // Commands shown in Telegram UI
 bot.setMyCommands([

@@ -33,14 +33,14 @@ const MENU = {
   bucket: { name: "Party Bucket 🎉", price: 15 },
 };
 
-// Format the menu for Telegram
+// Plain-text menu (NO Markdown parsing)
 function getMenuText() {
   return (
-    `🍹 *WIT Bar Menu*\n\n` +
+    "🍹 WIT Bar Menu\n\n" +
     Object.entries(MENU)
       .map(
         ([key, item]) =>
-          `${item.name} — *${item.price} WIT*\nBuy: /buy_${key}`
+          `${item.name} — ${item.price} WIT\nBuy: /buy_${key}`
       )
       .join("\n\n")
   );
@@ -79,7 +79,7 @@ app.use(express.json());
 const bot = new TelegramBot(TELEGRAM_TOKEN, { webHook: true });
 const TELEGRAM_WEBHOOK = `${SERVER_URL}/telegram`;
 
-// Set commands so Telegram shows them as buttons
+// Commands shown in Telegram’s UI
 bot.setMyCommands([
   { command: "menu", description: "Show drink menu 🍹" },
   { command: "buy_beer", description: "Buy a Beer (5 WIT)" },
@@ -117,7 +117,7 @@ bot.onText(/\/start/, (msg) => {
 });
 
 // =======================
-// LINK WALLET ON ANY MESSAGE
+// WALLET LINKING
 // =======================
 
 bot.on("message", (msg) => {
@@ -126,15 +126,15 @@ bot.on("message", (msg) => {
 
   if (!text) return;
 
-  // Simple Solana wallet check
-  if (text.length > 30 && text.length < 60) {
+  // Simple Solana wallet heuristic
+  if (text.length > 30 && text.length < 60 && !text.startsWith("/")) {
     walletToTelegram[text] = chatId;
     saveJSON(MAP_FILE, walletToTelegram);
 
-    bot.sendMessage(chatId, `🔗 Wallet linked!`);
+    bot.sendMessage(chatId, "🔗 Wallet linked!");
 
-    // Immediately show menu
-    bot.sendMessage(chatId, getMenuText(), { parse_mode: "Markdown" });
+    // Show menu (plain text, no Markdown)
+    bot.sendMessage(chatId, getMenuText());
   }
 });
 
@@ -143,7 +143,7 @@ bot.on("message", (msg) => {
 // =======================
 
 bot.onText(/\/menu/, (msg) => {
-  bot.sendMessage(msg.chat.id, getMenuText(), { parse_mode: "Markdown" });
+  bot.sendMessage(msg.chat.id, getMenuText());
 });
 
 // =======================
@@ -163,7 +163,6 @@ function handleBuy(drinkKey, chatId, wallet) {
     return;
   }
 
-  // Deduct balance
   balances[wallet] = balance - item.price;
   saveJSON(BAL_FILE, balances);
 
@@ -176,12 +175,10 @@ function handleBuy(drinkKey, chatId, wallet) {
   );
 }
 
-// Register all /buy commands
+// Register /buy_* commands
 ["beer", "cocktail", "bucket"].forEach((drinkKey) => {
   bot.onText(new RegExp(`/buy_${drinkKey}`), (msg) => {
     const chatId = msg.chat.id;
-
-    // Find which wallet belongs to this Telegram user
     const wallet = Object.keys(walletToTelegram).find(
       (w) => walletToTelegram[w] === chatId
     );
@@ -213,7 +210,6 @@ app.post("/helius", (req, res) => {
         const amount = Number(t.tokenAmount);
         const senderWallet = t.fromUserAccount;
 
-        // Update balance
         balances[senderWallet] = (balances[senderWallet] || 0) + amount;
         saveJSON(BAL_FILE, balances);
 
@@ -226,10 +222,8 @@ app.post("/helius", (req, res) => {
             { parse_mode: "Markdown" }
           );
 
-          // Auto-show menu after funds arrive
-          bot.sendMessage(telegramId, getMenuText(), {
-            parse_mode: "Markdown",
-          });
+          // Show menu after funds arrive (plain text)
+          bot.sendMessage(telegramId, getMenuText());
         }
       }
     });
@@ -257,6 +251,7 @@ app.listen(PORT, async () => {
   console.log(`🚀 WitPay server running on port ${PORT}`);
   await setWebhook();
 });
+
 
 
 

@@ -19,7 +19,7 @@ const SERVER_URL = process.env.SERVER_URL;
 const PORT = process.env.PORT || 8080;
 
 if (!TELEGRAM_TOKEN || !SERVER_URL || !BAR_WALLET || !WIT_MINT) {
-  console.error("❌ Missing required env vars");
+  console.error("❌ Missing required environment variables!");
   process.exit(1);
 }
 
@@ -33,14 +33,26 @@ const MENU = {
   bucket: { name: "Party Bucket 🎉", price: 15 },
 };
 
+// Format the menu for Telegram
+function getMenuText() {
+  return (
+    `🍹 *WIT Bar Menu*\n\n` +
+    Object.entries(MENU)
+      .map(
+        ([key, item]) =>
+          `${item.name} — *${item.price} WIT*\nBuy: /buy_${key}`
+      )
+      .join("\n\n")
+  );
+}
+
 // =======================
-// DATA STORAGE (JSON FILES)
+// JSON STORAGE
 // =======================
 
 const BAL_FILE = path.join(__dirname, "balances.json");
 const MAP_FILE = path.join(__dirname, "usermap.json");
 
-// Load balances
 function loadJSON(file) {
   if (!fs.existsSync(file)) return {};
   return JSON.parse(fs.readFileSync(file));
@@ -54,28 +66,37 @@ let balances = loadJSON(BAL_FILE);
 let walletToTelegram = loadJSON(MAP_FILE);
 
 // =======================
-// EXPRESS APP
+// EXPRESS
 // =======================
 
 const app = express();
 app.use(express.json());
 
 // =======================
-// TELEGRAM BOT (WEBHOOK MODE)
+// TELEGRAM BOT
 // =======================
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { webHook: true });
 const TELEGRAM_WEBHOOK = `${SERVER_URL}/telegram`;
 
+// Set commands so Telegram shows them as buttons
+bot.setMyCommands([
+  { command: "menu", description: "Show drink menu 🍹" },
+  { command: "buy_beer", description: "Buy a Beer (5 WIT)" },
+  { command: "buy_cocktail", description: "Buy a Cocktail (10 WIT)" },
+  { command: "buy_bucket", description: "Buy a Party Bucket (15 WIT)" },
+]);
+
 async function setWebhook() {
   try {
     await bot.setWebHook(TELEGRAM_WEBHOOK);
     console.log("✅ Telegram webhook set:", TELEGRAM_WEBHOOK);
-  } catch (e) {
-    console.error("❌ Failed to set webhook", e);
+  } catch (err) {
+    console.error("❌ Webhook error:", err);
   }
 }
 
+// Telegram webhook endpoint
 app.post("/telegram", (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
@@ -90,25 +111,30 @@ bot.onText(/\/start/, (msg) => {
 
   bot.sendMessage(
     chatId,
-    `🍻 *Welcome to the WIT Bar Bot!*\n\nYour bar wallet:\n\`${BAR_WALLET}\`\n\nSend WIT to buy drinks!\n\nReply with your *Solana wallet address* to link your account.`,
+    `🍻 *Welcome to the WIT Bar Bot!*\n\nSend WIT to the bar wallet:\n\`${BAR_WALLET}\`\n\nReply with your *Solana wallet address* to link your account.`,
     { parse_mode: "Markdown" }
   );
 });
 
 // =======================
-// WALLET LINKING
+// LINK WALLET ON ANY MESSAGE
 // =======================
 
 bot.on("message", (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text?.trim();
 
-  // Quick Solana address validation
-  if (text && text.length > 30 && text.length < 60) {
+  if (!text) return;
+
+  // Simple Solana wallet check
+  if (text.length > 30 && text.length < 60) {
     walletToTelegram[text] = chatId;
     saveJSON(MAP_FILE, walletToTelegram);
 
-    bot.sendMessage(chatId, `🔗 Wallet linked!\nI will notify you when WIT arrives.`);
+    bot.sendMessage(chatId, `🔗 Wallet linked!`);
+
+    // Immediately show menu
+    bot.sendMessage(chatId, getMenuText(), { parse_mode: "Markdown" });
   }
 });
 
@@ -117,17 +143,7 @@ bot.on("message", (msg) => {
 // =======================
 
 bot.onText(/\/menu/, (msg) => {
-  const chatId = msg.chat.id;
-
-  const menuString =
-    `🍹 *WIT Bar Menu*\n\n` +
-    Object.entries(MENU)
-      .map(
-        ([k, item]) => `${item.name} — *${item.price} WIT*\nBuy: /buy_${k}`
-      )
-      .join("\n\n");
-
-  bot.sendMessage(chatId, menuString, { parse_mode: "Markdown" });
+  bot.sendMessage(msg.chat.id, getMenuText(), { parse_mode: "Markdown" });
 });
 
 // =======================
@@ -136,49 +152,42 @@ bot.onText(/\/menu/, (msg) => {
 
 function handleBuy(drinkKey, chatId, wallet) {
   const item = MENU[drinkKey];
-  if (!item) return;
+  const balance = balances[wallet] || 0;
 
-  const userBalance = balances[wallet] || 0;
-
-  if (userBalance < item.price) {
+  if (balance < item.price) {
     bot.sendMessage(
       chatId,
-      `❌ Not enough WIT!\n${item.name} costs *${item.price} WIT* but you only have *${userBalance} WIT*.`,
+      `❌ Not enough WIT!\n${item.name} costs *${item.price} WIT* but you only have *${balance} WIT*.`,
       { parse_mode: "Markdown" }
     );
     return;
   }
 
-  // Deduct cost
-  balances[wallet] = userBalance - item.price;
+  // Deduct balance
+  balances[wallet] = balance - item.price;
   saveJSON(BAL_FILE, balances);
 
-  const ticketId = Math.random().toString(36).slice(2, 8).toUpperCase();
+  const ticketId = Math.random().toString(36).substring(2, 8).toUpperCase();
 
   bot.sendMessage(
     chatId,
-    `🎫 *Drink Ticket Created!*\n\n` +
-      `${item.name}\nCost: *${item.price} WIT*\n\n` +
-      `Ticket ID: \`${ticketId}\`\n\n` +
-      `Show this ticket to the bartender to redeem.`,
+    `🎫 *Drink Ticket Created!*\n\n${item.name}\nPrice: *${item.price} WIT*\nTicket ID: \`${ticketId}\`\n\nShow this ticket to the bartender.`,
     { parse_mode: "Markdown" }
   );
 }
 
-// =======================
-// BUY COMMANDS
-// =======================
-
+// Register all /buy commands
 ["beer", "cocktail", "bucket"].forEach((drinkKey) => {
   bot.onText(new RegExp(`/buy_${drinkKey}`), (msg) => {
     const chatId = msg.chat.id;
 
+    // Find which wallet belongs to this Telegram user
     const wallet = Object.keys(walletToTelegram).find(
       (w) => walletToTelegram[w] === chatId
     );
 
     if (!wallet) {
-      bot.sendMessage(chatId, "❌ Please link your wallet first by sending it.");
+      bot.sendMessage(chatId, "❌ Please link your wallet first.");
       return;
     }
 
@@ -192,47 +201,52 @@ function handleBuy(drinkKey, chatId, wallet) {
 
 app.post("/helius", (req, res) => {
   try {
-    const body = req.body;
-    if (!body || !body[0]) return res.sendStatus(200);
+    const data = req.body;
+    if (!data || !data[0]) return res.sendStatus(200);
 
-    const tx = body[0];
+    const tx = data[0];
 
     if (!tx.tokenTransfers) return res.sendStatus(200);
 
     tx.tokenTransfers.forEach((t) => {
       if (t.mint === WIT_MINT && t.toUserAccount === BAR_WALLET) {
         const amount = Number(t.tokenAmount);
-        const sender = t.fromUserAccount;
+        const senderWallet = t.fromUserAccount;
 
-        // Save balance
-        balances[sender] = (balances[sender] || 0) + amount;
+        // Update balance
+        balances[senderWallet] = (balances[senderWallet] || 0) + amount;
         saveJSON(BAL_FILE, balances);
 
-        const telegramId = walletToTelegram[sender];
+        const telegramId = walletToTelegram[senderWallet];
 
         if (telegramId) {
           bot.sendMessage(
             telegramId,
-            `🍻 *WIT RECEIVED!*\nYou sent *${amount} WIT* to the bar.\nYour new balance: *${balances[sender]} WIT*`,
+            `🍻 *WIT RECEIVED!*\nYou sent *${amount} WIT*.\nNew balance: *${balances[senderWallet]} WIT*`,
             { parse_mode: "Markdown" }
           );
+
+          // Auto-show menu after funds arrive
+          bot.sendMessage(telegramId, getMenuText(), {
+            parse_mode: "Markdown",
+          });
         }
       }
     });
 
     res.sendStatus(200);
   } catch (err) {
-    console.error("❌ Helius webhook error:", err);
+    console.error("Webhook error:", err);
     res.sendStatus(200);
   }
 });
 
 // =======================
-// ROOT
+// ROOT ENDPOINT
 // =======================
 
 app.get("/", (req, res) => {
-  res.send("WIT Bot server running 🚀");
+  res.send("WitPay Server Running 🚀");
 });
 
 // =======================
@@ -240,9 +254,10 @@ app.get("/", (req, res) => {
 // =======================
 
 app.listen(PORT, async () => {
-  console.log("🚀 WitPay Server running on port", PORT);
+  console.log(`🚀 WitPay server running on port ${PORT}`);
   await setWebhook();
 });
+
 
 
 

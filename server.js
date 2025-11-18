@@ -13,18 +13,46 @@ const __dirname = path.dirname(__filename);
 
 const TELEGRAM_TOKEN = process.env.BOT_TOKEN;
 const BAR_WALLET = process.env.BAR_WALLET;
+const WIT_MINT = process.env.WIT_MINT;     // <--- ADD THIS
+const SERVER_URL = process.env.SERVER_URL;
+
 const PORT = process.env.PORT || 8080;
-const SERVER_URL = process.env.SERVER_URL; // https://witbotserver-production.up.railway.app
 
-if (!TELEGRAM_TOKEN) {
-  console.error("❌ Missing BOT_TOKEN");
+if (!TELEGRAM_TOKEN || !SERVER_URL || !BAR_WALLET || !WIT_MINT) {
+  console.error("❌ Missing one of: BOT_TOKEN, SERVER_URL, BAR_WALLET, WIT_MINT");
   process.exit(1);
 }
 
-if (!SERVER_URL) {
-  console.error("❌ Missing SERVER_URL");
-  process.exit(1);
+// =======================
+// LOAD USER BALANCES
+// =======================
+
+const DATA_FILE = path.join(__dirname, "balances.json");
+
+function loadBalances() {
+  if (!fs.existsSync(DATA_FILE)) return {};
+  return JSON.parse(fs.readFileSync(DATA_FILE));
 }
+
+function saveBalances(data) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+let balances = loadBalances();
+
+// Track wallet → Telegram ID bindings
+const USER_MAP_FILE = path.join(__dirname, "usermap.json");
+
+function loadMap() {
+  if (!fs.existsSync(USER_MAP_FILE)) return {};
+  return JSON.parse(fs.readFileSync(USER_MAP_FILE));
+}
+
+function saveMap(data) {
+  fs.writeFileSync(USER_MAP_FILE, JSON.stringify(data, null, 2));
+}
+
+let walletToTelegram = loadMap();
 
 // =======================
 // EXPRESS APP
@@ -49,35 +77,104 @@ async function setWebhook() {
   }
 }
 
-// Telegram webhook route — **must return 200**
 app.post("/telegram", (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
 
 // =======================
-// BASIC BOT RESPONSE
+// /start command
 // =======================
 
 bot.onText(/\/start/, (msg) => {
+  const chatId = msg.chat.id;
+
   bot.sendMessage(
-    msg.chat.id,
-    `🍻 *Welcome to the WIT Bar Bot!*\n\nSend WIT to the bar wallet:\n\`${BAR_WALLET}\`\n\n(Drink menu coming soon!)`,
+    chatId,
+    `🍻 *Welcome to the WIT Bar Bot!*\n\nYour bar wallet:\n\`${BAR_WALLET}\`\n\nSend WIT to buy drinks!`,
+    { parse_mode: "Markdown" }
+  );
+
+  // Ask user to link their wallet
+  bot.sendMessage(
+    chatId,
+    "Reply with your *Solana wallet address* so I know where to credit your WIT!",
     { parse_mode: "Markdown" }
   );
 });
 
-// =======================
-// HELIUS WEBHOOK (WE MUST RETURN 200 ALWAYS)
-// =======================
+bot.on("message", (msg) => {
+  const chatId = msg.chat.id;
+  const text = msg.text?.trim();
 
-app.post("/helius", (req, res) => {
-  console.log("📩 Helius webhook received:", JSON.stringify(req.body, null, 2));
-  res.sendStatus(200);
+  // simple solana wallet detector
+  if (text && text.length > 30) {
+    walletToTelegram[text] = chatId;
+    saveMap(walletToTelegram);
+    bot.sendMessage(chatId, `🔗 Wallet linked!\nI will notify you when WIT arrives.`);
+  }
 });
 
 // =======================
-// HEALTH CHECK (GET /)
+// HELIUS WEBHOOK
+// =======================
+
+app.post("/helius", (req, res) => {
+  try {
+    const body = req.body;
+    console.log("📩 Helius webhook received");
+
+    if (!body || !body[0]) {
+      console.log("❌ No transaction data");
+      return res.sendStatus(200);
+    }
+
+    const tx = body[0];
+
+    // Look for SPL token transfers
+    if (!tx.tokenTransfers || tx.tokenTransfers.length === 0) {
+      console.log("ℹ️ No token transfers found");
+      return res.sendStatus(200);
+    }
+
+    tx.tokenTransfers.forEach((t) => {
+      if (
+        t.mint === WIT_MINT &&
+        t.toUserAccount === BAR_WALLET
+      ) {
+        const amount = Number(t.tokenAmount);
+
+        console.log("🎉 WIT RECEIVED!", amount);
+
+        // Find who sent it
+        const sender = t.fromUserAccount;
+        const telegramId = walletToTelegram[sender];
+
+        // Credit balance
+        balances[sender] = (balances[sender] || 0) + amount;
+        saveBalances(balances);
+
+        if (telegramId) {
+          bot.sendMessage(
+            telegramId,
+            `🍻 *WIT RECEIVED!*\nYou sent *${amount} WIT* to the bar.\nYour new balance: *${balances[sender]} WIT*`,
+            { parse_mode: "Markdown" }
+          );
+        } else {
+          console.log("⚠️ No Telegram user linked for wallet", sender);
+        }
+      }
+    });
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("❌ Error in Helius webhook:", err);
+    res.sendStatus(200);
+  }
+});
+
+// =======================
+// ROOT
 // =======================
 
 app.get("/", (req, res) => {

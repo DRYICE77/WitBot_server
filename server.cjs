@@ -1,128 +1,215 @@
 require("dotenv").config();
 const express = require("express");
-const TelegramBot = require("node-telegram-bot-api");
+const bodyParser = require("body-parser");
+const { Telegraf } = require("telegraf");
 const fs = require("fs");
+const path = require("path");
 
 const app = express();
-app.use(express.json({ limit: "5mb" }));
+app.use(bodyParser.json());
 
-// ENV
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const TELEGRAM_WEBHOOK = process.env.TELEGRAM_WEBHOOK;
-const PORT = process.env.PORT || 8080;
+// ============================
+//   Load / Save User Balances
+// ============================
 
-const BAR_WALLET = "4KHyVVoW4ejvaQmHjpREFbtRMSB9GLLXx8hD4UiYbZ5C";
-const WIT_MINT = "Adq3wnAvtaXBNfy63xGV1YNKdIPKadDT469xF9uZPrqE";
+const DATA_PATH = path.join(__dirname, "data.json");
 
-// balances JSON
-const DB_FILE = "./data/balances.json";
-if (!fs.existsSync("./data")) fs.mkdirSync("./data");
-if (!fs.existsSync(DB_FILE)) fs.writeFileSync(DB_FILE, "{}");
-
-function load() {
-  return JSON.parse(fs.readFileSync(DB_FILE));
-}
-function save(data) {
-  fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
+function loadData() {
+  try {
+    return JSON.parse(fs.readFileSync(DATA_PATH, "utf8"));
+  } catch (e) {
+    return {};
+  }
 }
 
-// BOT
-const bot = new TelegramBot(BOT_TOKEN, { polling: false });
-bot.setWebHook(TELEGRAM_WEBHOOK);
+function saveData(data) {
+  fs.writeFileSync(DATA_PATH, JSON.stringify(data, null, 2));
+}
 
-// Track processed signatures
-let processed = new Set();
+let db = loadData();
 
-app.post("/helius", async (req, res) => {
-  console.log("📬 Incoming Helius Webhook:", JSON.stringify(req.body, null, 2));
+// ============================
+//     Telegram Bot Setup
+// ============================
 
-  const txs = req.body;
-  let balances = load();
+const bot = new Telegraf(process.env.BOT_TOKEN);
 
-  for (const tx of txs) {
+const BAR_WALLET = process.env.BAR_WALLET;
+const WIT_MINT = process.env.WIT_MINT;
 
-    const sig = tx.signature;
-    if (processed.has(sig)) {
-      console.log("⚠️ Already processed, skipping:", sig);
-      continue;
-    }
+// Drink prices
+const DRINKS = {
+  beer: 5,
+  cocktail: 10,
+  bucket: 15,
+};
 
-    // TOKEN TRANSFERS APPEAR HERE
-    const transfers =
-      tx.events?.tokenTransfers ||
-      tx.tokenTransfers ||
-      [];
+// -----------------------------
+// Start Command
+// -----------------------------
+bot.start((ctx) => {
+  const userId = String(ctx.from.id);
 
-    if (!transfers.length) continue;
+  if (!db[userId]) {
+    db[userId] = { wallet: null, balance: 0 };
+    saveData(db);
+  }
 
-    for (const t of transfers) {
-      if (
-        t.mint === WIT_MINT &&
-        t.toUserAccount === BAR_WALLET
-      ) {
-        const amt = Number(t.tokenAmount);
-        const fromWallet = t.fromUserAccount;
-        const tgId = balances[fromWallet]?.telegramId;
+  ctx.reply(
+    `🍻 Welcome to the WIT Bar Bot!\n\nYour bar wallet:\n${BAR_WALLET}\n\nSend WIT to buy drinks!\n\nReply with your *Solana wallet address* so I know where to credit your WIT.`,
+    { parse_mode: "Markdown" }
+  );
+});
 
-        console.log("🔥 VALID WIT TRANSFER DETECTED:", amt);
+// -----------------------------
+// Handle Wallet Address
+// -----------------------------
+bot.on("text", (ctx) => {
+  const userId = String(ctx.from.id);
+  const text = ctx.message.text.trim();
 
-        if (!tgId) {
-          console.log("No telegram linked for:", fromWallet);
-          continue;
-        }
+  // If message looks like a Solana address
+  if (text.length >= 32 && text.length <= 60) {
+    db[userId].wallet = text;
+    saveData(db);
+    return ctx.reply("🔗 Wallet linked!\nI will notify you when WIT arrives.");
+  }
+});
 
-        // Update user balance
-        balances[fromWallet].balance =
-          (balances[fromWallet].balance || 0) + amt;
-        save(balances);
+// -----------------------------
+// Drink Menu Command
+// -----------------------------
+bot.command("menu", (ctx) => sendMenu(ctx));
 
-        processed.add(sig);
+function sendMenu(ctx) {
+  ctx.reply(
+    `🍹 *WIT Bar Menu*\n
+Beer 🍺 — 5 WIT
+Buy: /buy_beer
 
-        await bot.sendMessage(
-          tgId,
-          `🍺 *WIT RECEIVED!*\nYou sent *${amt} WIT* to the bar.\nNew balance: *${balances[fromWallet].balance} WIT*`,
-          { parse_mode: "Markdown" }
-        );
+Cocktail 🍸 — 10 WIT
+Buy: /buy_cocktail
 
-        console.log("✅ Notified Telegram user", tgId);
-      }
+Party Bucket 🎉 — 15 WIT
+Buy: /buy_bucket
+`,
+    { parse_mode: "Markdown" }
+  );
+}
+
+// -----------------------------
+// Purchase Commands
+// -----------------------------
+bot.command("buy_beer", (ctx) => attemptPurchase(ctx, "beer"));
+bot.command("buy_cocktail", (ctx) => attemptPurchase(ctx, "cocktail"));
+bot.command("buy_bucket", (ctx) => attemptPurchase(ctx, "bucket"));
+
+function attemptPurchase(ctx, drink) {
+  const userId = String(ctx.from.id);
+  const price = DRINKS[drink];
+
+  if (!db[userId]) {
+    return ctx.reply("❌ You must /start first.");
+  }
+
+  const balance = db[userId].balance;
+
+  if (balance < price) {
+    return ctx.reply(
+      `❌ Not enough WIT!\n${drinkLabel(drink)} costs *${price} WIT* but you only have *${balance} WIT*.`,
+      { parse_mode: "Markdown" }
+    );
+  }
+
+  db[userId].balance -= price;
+  saveData(db);
+
+  ctx.reply(
+    `🎉 You bought a ${drinkLabel(drink)}!\nRemaining Balance: *${db[userId].balance} WIT*`,
+    { parse_mode: "Markdown" }
+  );
+}
+
+function drinkLabel(d) {
+  if (d === "beer") return "Beer 🍺";
+  if (d === "cocktail") return "Cocktail 🍸";
+  if (d === "bucket") return "Party Bucket 🎉";
+  return d;
+}
+
+// ============================
+//       HELIUS WEBHOOK
+// ============================
+
+app.post("/helius", (req, res) => {
+  const body = req.body;
+
+  console.log("📬 Incoming Helius:", JSON.stringify(body, null, 2));
+
+  if (!Array.isArray(body)) {
+    return res.status(200).send("ignored");
+  }
+
+  for (const event of body) {
+    if (!event.tokenTransfers) continue;
+
+    for (const t of event.tokenTransfers) {
+      // Check the mint
+      if (t.mint !== WIT_MINT) continue;
+
+      // Must be TO the bar wallet
+      if (t.toUserAccount !== BAR_WALLET) continue;
+
+      const amount = Number(t.tokenAmount);
+      const fromWallet = t.fromUserAccount;
+
+      // Find which Telegram user this wallet belongs to
+      const userId = Object.keys(db).find((uid) => db[uid].wallet === fromWallet);
+      if (!userId) continue;
+
+      // Credit user
+      db[userId].balance += amount;
+      saveData(db);
+
+      // Send Telegram message
+      bot.telegram.sendMessage(
+        userId,
+        `🍻 *WIT RECEIVED!*\nYou sent *${amount} WIT* to the bar.\nNew balance: *${db[userId].balance} WIT*`,
+        { parse_mode: "Markdown" }
+      );
     }
   }
 
-  res.sendStatus(200);
+  res.status(200).send("ok");
 });
 
-// Telegram webhook
+// ============================
+//      TELEGRAM WEBHOOK
+// ============================
+
 app.post("/telegram", (req, res) => {
-  bot.processUpdate(req.body);
+  bot.handleUpdate(req.body);
   res.sendStatus(200);
 });
 
-// Commands
-bot.onText(/\/start/, (msg) => {
-  const id = msg.chat.id;
-  const balances = load();
-  const existing = Object.values(balances).find((x) => x.telegramId === id);
+// ============================
+//        START SERVER
+// ============================
 
-  if (existing) {
-    bot.sendMessage(id, "🍺 Welcome back to the WIT Bar!");
-    return;
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, async () => {
+  console.log(`🚀 WitPay server running on port ${PORT}`);
+
+  // Set webhook on startup
+  const url = process.env.WEBHOOK_URL;
+  if (url) {
+    try {
+      await bot.telegram.setWebhook(`${url}/telegram`);
+      console.log("✅ Telegram webhook set:", `${url}/telegram`);
+    } catch (err) {
+      console.error("❌ Failed to set webhook", err);
+    }
   }
-
-  const wallet = msg.text.split(" ")[1];
-  if (!wallet) {
-    bot.sendMessage(id, "Send your wallet with: /start YOUR_WALLET");
-    return;
-  }
-
-  balances[wallet] = { telegramId: id, balance: 0 };
-  save(balances);
-
-  bot.sendMessage(id, "🔗 Wallet linked! I’ll notify you when WIT arrives.");
-});
-
-app.listen(PORT, () => {
-  console.log(`🚀 WitPay running on port ${PORT}`);
 });
 
 

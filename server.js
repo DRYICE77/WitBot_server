@@ -15,11 +15,10 @@ const TELEGRAM_TOKEN = process.env.BOT_TOKEN;
 const BAR_WALLET = process.env.BAR_WALLET;
 const WIT_MINT = process.env.WIT_MINT;
 const SERVER_URL = process.env.SERVER_URL;
-
 const PORT = process.env.PORT || 8080;
 
-if (!TELEGRAM_TOKEN || !SERVER_URL || !BAR_WALLET || !WIT_MINT) {
-  console.error("❌ Missing required environment variables!");
+if (!TELEGRAM_TOKEN || !BAR_WALLET || !WIT_MINT || !SERVER_URL) {
+  console.error("❌ Missing required environment variables");
   process.exit(1);
 }
 
@@ -33,7 +32,6 @@ const MENU = {
   bucket: { name: "Party Bucket 🎉", price: 15 },
 };
 
-// Plain-text menu (NO Markdown parsing)
 function getMenuText() {
   return (
     "🍹 WIT Bar Menu\n\n" +
@@ -52,6 +50,7 @@ function getMenuText() {
 
 const BAL_FILE = path.join(__dirname, "balances.json");
 const MAP_FILE = path.join(__dirname, "usermap.json");
+const PROCESSED_FILE = path.join(__dirname, "processed.json");
 
 function loadJSON(file) {
   if (!fs.existsSync(file)) return {};
@@ -64,6 +63,7 @@ function saveJSON(file, data) {
 
 let balances = loadJSON(BAL_FILE);
 let walletToTelegram = loadJSON(MAP_FILE);
+let processedTxs = loadJSON(PROCESSED_FILE);
 
 // =======================
 // EXPRESS
@@ -79,7 +79,6 @@ app.use(express.json());
 const bot = new TelegramBot(TELEGRAM_TOKEN, { webHook: true });
 const TELEGRAM_WEBHOOK = `${SERVER_URL}/telegram`;
 
-// Commands shown in Telegram’s UI
 bot.setMyCommands([
   { command: "menu", description: "Show drink menu 🍹" },
   { command: "buy_beer", description: "Buy a Beer (5 WIT)" },
@@ -96,7 +95,6 @@ async function setWebhook() {
   }
 }
 
-// Telegram webhook endpoint
 app.post("/telegram", (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
@@ -126,14 +124,12 @@ bot.on("message", (msg) => {
 
   if (!text) return;
 
-  // Simple Solana wallet heuristic
+  // Detect wallet address (simple heuristic)
   if (text.length > 30 && text.length < 60 && !text.startsWith("/")) {
     walletToTelegram[text] = chatId;
     saveJSON(MAP_FILE, walletToTelegram);
 
     bot.sendMessage(chatId, "🔗 Wallet linked!");
-
-    // Show menu (plain text, no Markdown)
     bot.sendMessage(chatId, getMenuText());
   }
 });
@@ -147,7 +143,7 @@ bot.onText(/\/menu/, (msg) => {
 });
 
 // =======================
-// DRINK PURCHASE HANDLER
+// DRINK PURCHASE LOGIC
 // =======================
 
 function handleBuy(drinkKey, chatId, wallet) {
@@ -175,10 +171,10 @@ function handleBuy(drinkKey, chatId, wallet) {
   );
 }
 
-// Register /buy_* commands
 ["beer", "cocktail", "bucket"].forEach((drinkKey) => {
   bot.onText(new RegExp(`/buy_${drinkKey}`), (msg) => {
     const chatId = msg.chat.id;
+
     const wallet = Object.keys(walletToTelegram).find(
       (w) => walletToTelegram[w] === chatId
     );
@@ -198,10 +194,20 @@ function handleBuy(drinkKey, chatId, wallet) {
 
 app.post("/helius", (req, res) => {
   try {
-    const data = req.body;
-    if (!data || !data[0]) return res.sendStatus(200);
+    const body = req.body;
+    if (!body || !body[0]) return res.sendStatus(200);
 
-    const tx = data[0];
+    const tx = body[0];
+    const signature = tx.signature;
+
+    // Idempotency: prevent double-crediting
+    if (processedTxs[signature]) {
+      console.log("⚠️ Duplicate webhook ignored:", signature);
+      return res.sendStatus(200);
+    }
+
+    processedTxs[signature] = true;
+    saveJSON(PROCESSED_FILE, processedTxs);
 
     if (!tx.tokenTransfers) return res.sendStatus(200);
 
@@ -222,7 +228,6 @@ app.post("/helius", (req, res) => {
             { parse_mode: "Markdown" }
           );
 
-          // Show menu after funds arrive (plain text)
           bot.sendMessage(telegramId, getMenuText());
         }
       }
@@ -230,7 +235,7 @@ app.post("/helius", (req, res) => {
 
     res.sendStatus(200);
   } catch (err) {
-    console.error("Webhook error:", err);
+    console.error("❌ Webhook error:", err);
     res.sendStatus(200);
   }
 });
@@ -251,6 +256,7 @@ app.listen(PORT, async () => {
   console.log(`🚀 WitPay server running on port ${PORT}`);
   await setWebhook();
 });
+
 
 
 

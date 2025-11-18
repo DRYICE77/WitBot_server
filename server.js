@@ -65,19 +65,25 @@ let balances = loadJSON(BAL_FILE);
 let walletToTelegram = loadJSON(MAP_FILE);
 
 // =======================
-// EXPRESS
+// EXPRESS SERVER
 // =======================
 
 const app = express();
 app.use(express.json());
 
 // =======================
-// TELEGRAM BOT
+// TELEGRAM BOT (WEBHOOK MODE)
 // =======================
 
-const bot = new TelegramBot(TELEGRAM_TOKEN, { webHook: true });
+const bot = new TelegramBot(TELEGRAM_TOKEN, {
+  webHook: { port: PORT },
+  polling: false
+});
+
+// Full webhook URL (Telegram must reach this)
 const TELEGRAM_WEBHOOK = `${SERVER_URL}/telegram`;
 
+// Commands shown in Telegram UI
 bot.setMyCommands([
   { command: "menu", description: "Show drink menu 🍹" },
   { command: "buy_beer", description: "Buy a Beer (5 WIT)" },
@@ -85,15 +91,16 @@ bot.setMyCommands([
   { command: "buy_bucket", description: "Buy a Party Bucket (15 WIT)" },
 ]);
 
-async function setWebhook() {
+async function initWebhook() {
   try {
     await bot.setWebHook(TELEGRAM_WEBHOOK);
     console.log("✅ Telegram webhook set:", TELEGRAM_WEBHOOK);
   } catch (err) {
-    console.error("❌ Webhook error:", err);
+    console.error("❌ Telegram webhook error:", err);
   }
 }
 
+// Telegram → Express → Bot
 app.post("/telegram", (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
@@ -132,7 +139,7 @@ bot.on("message", (msg) => {
 });
 
 // =======================
-// MENU
+// MENU COMMAND
 // =======================
 
 bot.onText(/\/menu/, (msg) => {
@@ -140,7 +147,7 @@ bot.onText(/\/menu/, (msg) => {
 });
 
 // =======================
-// DRINK PURCHASE
+// PURCHASE HANDLER
 // =======================
 
 function handleBuy(drinkKey, chatId, wallet) {
@@ -168,9 +175,11 @@ function handleBuy(drinkKey, chatId, wallet) {
   );
 }
 
+// Register buy commands
 ["beer", "cocktail", "bucket"].forEach((drinkKey) => {
   bot.onText(new RegExp(`/buy_${drinkKey}`), (msg) => {
     const chatId = msg.chat.id;
+
     const wallet = Object.keys(walletToTelegram).find(
       (w) => walletToTelegram[w] === chatId
     );
@@ -185,9 +194,10 @@ function handleBuy(drinkKey, chatId, wallet) {
 });
 
 // =======================
-// HELIUS WEBHOOK (DEDUP FIX)
+// HELIUS WEBHOOK
 // =======================
 
+// Prevent double crediting
 let processed = new Set();
 
 app.post("/helius", (req, res) => {
@@ -202,15 +212,12 @@ app.post("/helius", (req, res) => {
         if (t.mint !== WIT_MINT) return;
         if (t.toUserAccount !== BAR_WALLET) return;
 
-        // Signature fallback
         const sig = t.signature || event.signature;
         if (!sig) return;
 
-        // 🔥 Prevent double credit
         if (processed.has(sig)) return;
         processed.add(sig);
 
-        // Expire memory cache occasionally
         if (processed.size > 5000) processed = new Set();
 
         const amount = Number(t.tokenAmount);
@@ -234,19 +241,28 @@ app.post("/helius", (req, res) => {
 
     res.sendStatus(200);
   } catch (err) {
-    console.error("❌ Helius webhook error:", err);
+    console.error("❌ Error in Helius webhook:", err);
     res.sendStatus(200);
   }
 });
 
 // =======================
-// SERVER START
+// ROOT ENDPOINT
+// =======================
+
+app.get("/", (req, res) => {
+  res.send("WitPay Server Running 🚀");
+});
+
+// =======================
+// START SERVER
 // =======================
 
 app.listen(PORT, async () => {
   console.log(`🚀 WitPay server running on port ${PORT}`);
-  await setWebhook();
+  await initWebhook();
 });
+
 
 
 
